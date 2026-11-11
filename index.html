@@ -49,7 +49,16 @@
     background: #fff;
     color: var(--ink);
   }
-  input:focus-visible, button:focus-visible, a:focus-visible {
+  select {
+    width: 100%;
+    font: inherit;
+    padding: 13px 14px;
+    border: 1.5px solid var(--line);
+    border-radius: 10px;
+    background: #fff;
+    color: var(--ink);
+  }
+  input:focus-visible, select:focus-visible, button:focus-visible, a:focus-visible {
     outline: 3px solid var(--ink);
     outline-offset: 2px;
   }
@@ -166,6 +175,21 @@
   </div>
   <p class="hint">Бесплатный ключ: <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>. Он хранится только в твоём браузере и отправляется только в Google.</p>
 
+  <div class="field" style="margin-top:16px">
+    <label for="model">Модель</label>
+    <select id="model">
+      <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite</option>
+      <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+      <option value="gemini-2.5-pro">gemini-2.5-pro</option>
+      <option value="gemini-3-flash-preview">gemini-3-flash-preview</option>
+      <option value="gemini-3-pro-preview">gemini-3-pro-preview</option>
+      <option value="gemini-3.5-flash">gemini-3.5-flash</option>
+      <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite</option>
+      <option value="__custom">Своя модель…</option>
+    </select>
+    <input id="modelCustom" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Название модели, например gemini-2.5-flash" hidden style="margin-top:8px">
+  </div>
+
   <button id="go" type="button">Найти моменты</button>
   <p id="status" role="status" aria-live="polite"></p>
 
@@ -183,13 +207,36 @@
 </main>
 
 <script>
-const MODEL = "gemini-2.5-flash";
 const $ = (s) => document.querySelector(s);
 const urlEl = $("#url"), keyEl = $("#key"), nEl = $("#n"), goBtn = $("#go");
+const modelEl = $("#model"), modelCustomEl = $("#modelCustom");
 const statusEl = $("#status"), resultsEl = $("#results"), listEl = $("#list");
 let currentClips = [], currentId = "";
 
 keyEl.value = localStorage.getItem("gemini_key") || "";
+
+// Restore saved model: a listed one, or a custom name
+(function restoreModel() {
+  const saved = localStorage.getItem("gemini_model") || "gemini-2.5-flash";
+  const known = [...modelEl.options].some((o) => o.value === saved && o.value !== "__custom");
+  if (known) {
+    modelEl.value = saved;
+  } else {
+    modelEl.value = "__custom";
+    modelCustomEl.value = saved;
+    modelCustomEl.hidden = false;
+  }
+})();
+
+modelEl.addEventListener("change", () => {
+  const custom = modelEl.value === "__custom";
+  modelCustomEl.hidden = !custom;
+  if (custom) modelCustomEl.focus();
+});
+
+function currentModel() {
+  return modelEl.value === "__custom" ? modelCustomEl.value.trim() : modelEl.value;
+}
 
 function videoId(raw) {
   try {
@@ -232,8 +279,8 @@ function setStatus(text, isError) {
   statusEl.className = isError ? "error" : "";
 }
 
-async function askGemini(url, key, n) {
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
+async function askGemini(url, key, n, model) {
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
   const res = await fetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-goog-api-key": key },
@@ -251,6 +298,7 @@ async function askGemini(url, key, n) {
   if (!res.ok) {
     const msg = (data.error && data.error.message) || `Ошибка ${res.status}`;
     if (res.status === 400 && /API key/i.test(msg)) throw new Error("Ключ Gemini не подошёл. Проверь, что скопировал его целиком.");
+    if (res.status === 404) throw new Error(`Модель «${model}» не найдена. Проверь название или выбери другую из списка.`);
     if (res.status === 429) throw new Error("Лимит бесплатного Gemini исчерпан. Подожди немного или попробуй завтра.");
     throw new Error(msg);
   }
@@ -327,12 +375,16 @@ goBtn.addEventListener("click", async () => {
   if (!id) return setStatus("Это не похоже на ссылку YouTube. Вставь ссылку вида youtube.com/watch?v=... или youtu.be/...", true);
   if (!key) return setStatus("Вставь ключ Gemini API. Бесплатный ключ берётся на aistudio.google.com/apikey.", true);
 
+  const model = currentModel();
+  if (!model) return setStatus("Впиши название модели или выбери из списка.", true);
+
   localStorage.setItem("gemini_key", key);
+  localStorage.setItem("gemini_model", model);
   goBtn.disabled = true;
-  setStatus("Gemini смотрит видео. Для длинных роликов это может занять минуту-две.");
+  setStatus(`Модель ${model} смотрит видео. Для длинных роликов это может занять минуту-две.`);
 
   try {
-    const raw = await askGemini(`https://www.youtube.com/watch?v=${id}`, key, n);
+    const raw = await askGemini(`https://www.youtube.com/watch?v=${id}`, key, n, model);
     const clips = (Array.isArray(raw) ? raw : [])
       .map((c) => ({
         start: toSec(c.start),
